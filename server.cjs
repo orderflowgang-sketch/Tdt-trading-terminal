@@ -1,7 +1,16 @@
 require('dotenv').config();
 const express = require('express');
+const RawTelegramBot = require('node-telegram-bot-api');
 const puppeteer = require('puppeteer');
 const cron = require('node-cron');
+
+// Safely resolve constructor across Node module wrapper shapes
+const TelegramBot =
+  (typeof RawTelegramBot === 'function' && RawTelegramBot) ||
+  RawTelegramBot.TelegramBot ||
+  (RawTelegramBot.default && RawTelegramBot.default.TelegramBot) ||
+  RawTelegramBot.default ||
+  RawTelegramBot;
 
 const app = express();
 
@@ -12,7 +21,7 @@ app.use((req, res, next) => {
   next();
 });
 
-const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
+const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { polling: false });
 const CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 
 let latestMatrixState = null;
@@ -24,7 +33,6 @@ app.post('/api/matrix-update', (req, res) => {
   res.status(200).send({ status: 'Matrix state updated' });
 });
 
-// Helper to check 100% expansion and CISD requirements
 function isTimeframeAligned(tfData, targetDirection) {
   if (!tfData) return false;
   return (
@@ -34,7 +42,6 @@ function isTimeframeAligned(tfData, targetDirection) {
   );
 }
 
-// Background Evaluator
 async function evaluateConfluence() {
   if (!latestMatrixState) return;
 
@@ -56,47 +63,22 @@ async function evaluateConfluence() {
   if ((isDailySetup || isWeeklySetup) && (now - lastFiredTimestamp > cooldownPeriod)) {
     lastFiredTimestamp = now;
     const modelTitle = isWeeklySetup ? 'WEEKLY + DAILY MACRO ALIGNMENT' : 'DAILY EXPANSION MODEL';
-    
+
     console.log(`[TRIGGER] High-Probability Alignment Detected: ${modelTitle}`);
     await captureAndSendSnapshot(modelTitle, direction);
   }
 }
 
-// Native Telegram Dispatcher using Node built-in fetch
-async function sendTelegramPhoto(imageBuffer, caption) {
-  const formData = new FormData();
-  formData.append('chat_id', CHAT_ID);
-  formData.append('caption', caption);
-  formData.append('parse_mode', 'Markdown');
-  formData.append('photo', new Blob([imageBuffer], { type: 'image/png' }), 'snapshot.png');
-
-  const response = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendPhoto`, {
-    method: 'POST',
-    body: formData,
-  });
-
-  const result = await response.json();
-  if (!result.ok) {
-    throw new Error(`Telegram API Error: ${result.description}`);
-  }
-  return result;
-}
-
-// Puppeteer Screenshot Engine configured for Render Linux environment
 async function captureAndSendSnapshot(modelTitle, direction) {
   try {
-    const browser = await puppeteer.launch({ 
-      headless: true,
+    const browser = await puppeteer.launch({
+      headless: 'new',
       args: [
-        '--no-sandbox', 
+        '--no-sandbox',
         '--disable-setuid-sandbox',
         '--disable-dev-shm-usage',
-        '--disable-accelerated-2d-canvas',
-        '--no-first-run',
-        '--no-zygote',
-        '--single-process',
         '--disable-gpu'
-      ] 
+      ]
     });
     const page = await browser.newPage();
 
@@ -106,14 +88,14 @@ async function captureAndSendSnapshot(modelTitle, direction) {
     const imageBuffer = await page.screenshot({ fullPage: false });
     await browser.close();
 
-    const caption = 
+    const caption =
       `🚨 *HIGH-PROBABILITY TDT ALIGNMENT*\n\n` +
       `*Model:* ${modelTitle}\n` +
       `*Direction:* ${direction}\n` +
       `*Status:* 100% Expansion & CISD Confirmed\n` +
       `*Timestamp:* ${new Date().toLocaleTimeString()} SAST`;
 
-    await sendTelegramPhoto(imageBuffer, caption);
+    await bot.sendPhoto(CHAT_ID, imageBuffer, { caption, parse_mode: 'Markdown' });
     console.log('[SUCCESS] Telegram snapshot dispatched.');
   } catch (error) {
     console.error('[ERROR] Snapshot dispatch failed:', error);
