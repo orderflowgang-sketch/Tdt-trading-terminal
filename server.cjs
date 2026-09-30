@@ -1,16 +1,7 @@
 require('dotenv').config();
 const express = require('express');
-const RawTelegramBot = require('node-telegram-bot-api');
 const puppeteer = require('puppeteer');
 const cron = require('node-cron');
-
-// Safely resolve constructor across Node v24 module wrapper shapes
-const TelegramBot = 
-  (typeof RawTelegramBot === 'function' && RawTelegramBot) ||
-  RawTelegramBot.TelegramBot ||
-  (RawTelegramBot.default && RawTelegramBot.default.TelegramBot) ||
-  RawTelegramBot.default ||
-  RawTelegramBot;
 
 const app = express();
 
@@ -21,17 +12,19 @@ app.use((req, res, next) => {
   next();
 });
 
-const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { polling: false });
+const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 
 let latestMatrixState = null;
 let lastFiredTimestamp = 0;
 
+// API endpoint receiving matrix updates from React UI
 app.post('/api/matrix-update', (req, res) => {
   latestMatrixState = req.body;
   res.status(200).send({ status: 'Matrix state updated' });
 });
 
+// Helper to check 100% expansion and CISD requirements
 function isTimeframeAligned(tfData, targetDirection) {
   if (!tfData) return false;
   return (
@@ -41,6 +34,7 @@ function isTimeframeAligned(tfData, targetDirection) {
   );
 }
 
+// Background Evaluator
 async function evaluateConfluence() {
   if (!latestMatrixState) return;
 
@@ -68,11 +62,31 @@ async function evaluateConfluence() {
   }
 }
 
+// Native Telegram Dispatcher using Node 24 built-in fetch
+async function sendTelegramPhoto(imageBuffer, caption) {
+  const formData = new FormData();
+  formData.append('chat_id', CHAT_ID);
+  formData.append('caption', caption);
+  formData.append('parse_mode', 'Markdown');
+  formData.append('photo', new Blob([imageBuffer], { type: 'image/png' }), 'snapshot.png');
+
+  const response = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendPhoto`, {
+    method: 'POST',
+    body: formData,
+  });
+
+  const result = await response.json();
+  if (!result.ok) {
+    throw new Error(`Telegram API Error: ${result.description}`);
+  }
+  return result;
+}
+
+// Puppeteer Screenshot Engine
 async function captureAndSendSnapshot(modelTitle, direction) {
   try {
     const browser = await puppeteer.launch({ 
       headless: 'new',
-      executablePath: 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
       args: ['--no-sandbox', '--disable-setuid-sandbox'] 
     });
     const page = await browser.newPage();
@@ -90,7 +104,7 @@ async function captureAndSendSnapshot(modelTitle, direction) {
       `*Status:* 100% Expansion & CISD Confirmed\n` +
       `*Timestamp:* ${new Date().toLocaleTimeString()} SAST`;
 
-    await bot.sendPhoto(CHAT_ID, imageBuffer, { caption, parse_mode: 'Markdown' });
+    await sendTelegramPhoto(imageBuffer, caption);
     console.log('[SUCCESS] Telegram snapshot dispatched.');
   } catch (error) {
     console.error('[ERROR] Snapshot dispatch failed:', error);
@@ -101,6 +115,7 @@ cron.schedule('* * * * *', () => {
   evaluateConfluence();
 });
 
-app.listen(process.env.PORT || 5000, () => {
-  console.log(`[ACTIVE] TDT Background Engine online on port ${process.env.PORT || 5000}`);
+const PORT = process.env.PORT || 5000;
+app.listen(PORT, () => {
+  console.log(`[ACTIVE] TDT Background Engine online on port ${PORT}`);
 });
